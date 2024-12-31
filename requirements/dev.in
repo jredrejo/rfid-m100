@@ -1,0 +1,3 @@
+black
+mypy
+pre-commit
