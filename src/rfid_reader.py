@@ -102,7 +102,7 @@ class RFIDReader:
             return ""
 
         # Get the relevant portion (after '00', excluding last 2 bytes)
-        hex_text = hex_string[zero_pos + 2 : -4]  # noqa: E203
+        hex_text = hex_string[zero_pos + 2 : -4]
 
         # Convert hex string to bytes and then to ASCII
         try:
@@ -142,9 +142,9 @@ class RFIDReader:
                 length=(
                     b"\x00\x00"
                     if payload is None
-                    else len(payload.value).to_bytes(2, byteorder="big")
+                    else len(payload).to_bytes(2, byteorder="big")
                 ),
-                payload=None if payload is None else payload.value,
+                payload=None if payload is None else payload,
                 checksum=None,
                 tail=Command.FRAME_TAIL.value,
             )
@@ -163,15 +163,15 @@ class RFIDReader:
     def get_reader_info(self):
         """Get reader information"""
         try:
-            self.send_command(Command.GET_INFO, InfoVersion.HARDWARE)
+            self.send_command(Command.GET_INFO, InfoVersion.HARDWARE.value)
             hw_version = self._read_hex()
             hw_version_text = self._extract_text_from_hex(hw_version)
 
-            self.send_command(Command.GET_INFO, InfoVersion.SOFTWARE)
+            self.send_command(Command.GET_INFO, InfoVersion.SOFTWARE.value)
             sw_version = self._read_hex()
             sw_version_text = self._extract_text_from_hex(sw_version)
 
-            self.send_command(Command.GET_INFO, InfoVersion.MANUFACTURERS)
+            self.send_command(Command.GET_INFO, InfoVersion.MANUFACTURERS.value)
             manufacturer = self._read_hex()
             manufacturer_text = self._extract_text_from_hex(manufacturer)
 
@@ -217,7 +217,66 @@ class RFIDReader:
             return None
 
     def inventory(self, timeout=1.0):
-        pass
+        """
+        Perform an ISO18000-6C inventory command to read multiple tags at once
+        Args:
+            timeout: How long to wait for response in seconds
+        Returns:
+            List of dictionaries containing tag data
+        """
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Reader is not connected")
+
+        try:
+            tags = []
+
+            # Send inventory command
+            self.send_command(Command.GET_INVENTORY, b"\x22\x27\x10")
+
+            # Read response
+            buffer = self._read_hex()
+
+            # Parse multiple tag response
+            if buffer.startswith(Command.NOTIFICATION_POOLING.value.hex()):
+                print("Debug - Prefix matched successfully")
+                # Get number of tags from response
+                num_tags = int(buffer[8:10], 16)
+                print(f"Debug - Number of tags found: {num_tags}")
+
+                # Parse each tag
+                pos = 10  # Start position after tag count
+                for i in range(num_tags):
+                    # Minimum length for one tag data is 34 bytes
+                    if len(buffer) < pos + 34:
+                        print(
+                            f"Debug - Buffer too short at tag {i}. Length: {len(buffer)}, Position: {pos}"  # noqa: E501
+                        )
+                        break
+
+                    rssi = int(buffer[pos : pos + 2], 16)
+                    rssi = -((-rssi) & 0xFF)
+                    pos += 2
+
+                    pc = buffer[pos : pos + 4]
+                    pos += 4
+
+                    epc = buffer[pos : pos + 24]
+                    pos += 24
+
+                    crc = buffer[pos : pos + 4]
+                    pos += 4
+
+                    tag_data = {"pc": pc, "epc": epc, "rssi": rssi, "crc": crc}
+                    print(f"Debug - Tag {i} data: {tag_data}")
+                    tags.append(tag_data)
+            else:
+                print("Debug - Prefix match failed")
+
+            return tags
+
+        except Exception as e:
+            print(f"Error during inventory: {e}")
+            return []
 
     def automatic_frequency_hopping_mode(self, mode=True):
         pass
