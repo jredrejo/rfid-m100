@@ -9,6 +9,7 @@ class Command(Enum):
     GET_INVENTORY = b"\x27"
     GET_SINGLE_POOLING = b"\x22"
     GET_INFO = b"\x03"
+    AFHM = b"\xAD"
 
 
 class MemoryBank(Enum):

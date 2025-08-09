@@ -2,10 +2,10 @@
 import sys
 import time
 
-from rfid_reader import RFIDReader
+from .rfid_reader import RFIDReader
 
 
-def print_tag(tag):
+def print_tag(tag: dict[str, str]):
     """Helper function to print tag information"""
     print(f"PC: {tag['pc']}")
     print(f"EPC: {tag['epc']}")
@@ -23,7 +23,7 @@ def print_menu():
     return input("Select mode (1, 2, 3, or q): ")
 
 
-def single_tag_mode(reader):
+def single_tag_mode(reader: RFIDReader):
     """Run single tag reading mode"""
     print("\nSingle Tag Reading Mode")
     print("Press Ctrl+C to return to menu")
@@ -38,7 +38,7 @@ def single_tag_mode(reader):
         print("\nReturning to menu...")
 
 
-def inventory_mode(reader):
+def inventory_mode(reader: RFIDReader):
     """Run inventory mode"""
     print("\nInventory Mode (Multiple Tags)")
     print("Press Ctrl+C to return to menu")

@@ -1,10 +1,12 @@
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 import serial
-from constants import Command
-from constants import InfoVersion
-from constants import PacketType
+
+from .constants import Command
+from .constants import InfoVersion
+from .constants import PacketType
 
 
 @dataclass
@@ -24,8 +26,8 @@ class RequestPacket:
     type: bytes
     command: bytes
     length: bytes
-    payload: bytes
-    checksum: bytes
+    payload: Optional[bytes]
+    checksum: Optional[bytes]
     tail: bytes
 
 
@@ -34,12 +36,11 @@ class RFIDReader:
     RFID Reader class for ISO18000-6C / EPC C1 GEN2 protocol
     """
 
-    def __init__(self, port="/dev/ttyUSB0", baudrate=115200):
+    def __init__(self, port: str = "/dev/ttyUSB0", baudrate: int = 115200):
         self.port = port
         self.baudrate = baudrate
-        self.serial = None
 
-    def connect(self):
+    def connect(self) -> bool:
         try:
             self.serial = serial.Serial(
                 port=self.port,
@@ -56,12 +57,14 @@ class RFIDReader:
             return False
 
     def disconnect(self):
-        if self.serial and self.serial.is_open:
+        if hasattr(self, "serial") and self.serial.is_open:
             self.serial.flush()
             self.serial.close()
 
-    def _read_hex(self):
+    def _read_hex(self) -> str:
         """Read hex data from serial port"""
+        if not hasattr(self, "serial"):
+            raise ValueError("Serial port not initialized")
         buffer = []
         while self.serial.in_waiting > 0:
             read_byte = self.serial.read().hex()
@@ -70,7 +73,7 @@ class RFIDReader:
         self.serial.flush()
         return "".join(buffer)
 
-    def calculate_crc(self, packet: RequestPacket):
+    def calculate_crc(self, packet: RequestPacket) -> bytes:
         """Calculate CRC for YRM100 protocol.
         Returns a single byte."""
         data = packet.type
@@ -83,7 +86,7 @@ class RFIDReader:
             crc += byte
         return bytes([crc & 0xFF])
 
-    def _extract_text_from_hex(self, hex_string):
+    def _extract_text_from_hex(self, hex_string: str) -> str:
         """
         Extract ASCII text from a hex string,
         starting after the first '00' byte
@@ -111,7 +114,7 @@ class RFIDReader:
         except (ValueError, UnicodeDecodeError):
             return ""
 
-    def pack_frame(self, packet: RequestPacket):
+    def pack_frame(self, packet: RequestPacket) -> bytes:
         """
         Pack a packet structure into a bytes buffer.
         Args:
@@ -125,12 +128,14 @@ class RFIDReader:
         pbuf += packet.length
         if packet.payload is not None:
             pbuf += packet.payload
-        pbuf += packet.checksum
+        pbuf += packet.checksum if packet.checksum is not None else b"\x00"
         pbuf += packet.tail
 
         return pbuf
 
-    def send_command(self, command, payload=None, time_wait=True):
+    def send_command(
+        self, command: Command, payload: Optional[bytes] = None, time_wait: bool = True
+    ) -> bool:
         if not self.serial or not self.serial.is_open:
             raise ConnectionError("Reader is not connected")
 
@@ -160,7 +165,7 @@ class RFIDReader:
             print(f"Error sending command: {e}")
             return False
 
-    def get_reader_info(self):
+    def get_reader_info(self) -> Optional[dict[str, str]]:
         """Get reader information"""
         try:
             self.send_command(Command.GET_INFO, InfoVersion.HARDWARE.value)
@@ -185,7 +190,7 @@ class RFIDReader:
             print(f"Error getting reader info: {e}")
             return None
 
-    def read_tag(self):
+    def read_tag(self) -> Optional[dict[str, str]]:
         """
         Read a single RFID tag
         Returns a dictionary with tag data if successful, None otherwise
@@ -201,14 +206,14 @@ class RFIDReader:
 
             # verify output is valid - card found
             if buffer.startswith(Command.NOTIFICATION_POOLING.value.hex()):
-                rssi = int(buffer[10:12], 16)
-                rssi = -((-rssi) & 0xFF)
+                raw_rssi = int(buffer[10:12], 16)
+                rssi = -((-raw_rssi) & 0xFF)
 
                 pc = buffer[12:16]
                 epc = buffer[16:40]
                 crc = buffer[40:44]
 
-                return {"pc": pc, "epc": epc, "rssi": rssi, "crc": crc}
+                return {"pc": pc, "epc": epc, "rssi": str(rssi), "crc": str(crc)}
 
             return None
 
@@ -216,7 +221,7 @@ class RFIDReader:
             print(f"Error reading tag: {e}")
             return None
 
-    def inventory(self, timeout=1.0):
+    def inventory(self, timeout: float = 1.0) -> list[dict[str, str]]:
         """
         Perform an ISO18000-6C inventory command to read multiple tags at once
         Args:
@@ -266,7 +271,12 @@ class RFIDReader:
                     crc = buffer[pos : pos + 4]
                     pos += 4
 
-                    tag_data = {"pc": pc, "epc": epc, "rssi": rssi, "crc": crc}
+                    tag_data = {
+                        "pc": pc,
+                        "epc": epc,
+                        "rssi": str(rssi),
+                        "crc": str(crc),
+                    }
                     print(f"Debug - Tag {i} data: {tag_data}")
                     tags.append(tag_data)
             else:
@@ -278,5 +288,21 @@ class RFIDReader:
             print(f"Error during inventory: {e}")
             return []
 
-    def automatic_frequency_hopping_mode(self, mode=True):
-        pass
+    def automatic_frequency_hopping_mode(self, mode: bool = True) -> bool:
+        if not self.serial or not self.serial.is_open:
+            raise ConnectionError("Reader is not connected")
+
+        try:
+            self.serial.write(Command.AFHM.value)
+            # xFF\xAD\x7E
+            if mode:
+                self.serial.write(b"\xFF")
+            else:
+                self.serial.write(b"\x00")
+
+            self.serial.write(Command.TERMINATOR.value)
+            time.sleep(0.1)
+            return True
+        except Exception as e:
+            print(f"Error setting automatic frequency hopping mode: {e}")
+            return False
