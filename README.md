@@ -8,3 +8,7 @@ pip install -r requirements/requirements.txt
 pip install -r requirements/dev.txt
 pre-commit install
 ```
+
+
+To execute in a shell:
+python -m src.main

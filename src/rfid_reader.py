@@ -1,3 +1,4 @@
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -206,20 +207,22 @@ class RFIDReader:
 
             # verify output is valid - card found
             if buffer.startswith(Command.NOTIFICATION_POOLING.value.hex()):
-                raw_rssi = int(buffer[10:12], 16)
-                rssi = -((-raw_rssi) & 0xFF)
-
-                pc = buffer[12:16]
-                epc = buffer[16:40]
-                crc = buffer[40:44]
-
-                return {"pc": pc, "epc": epc, "rssi": str(rssi), "crc": str(crc)}
+                return self._parse_tag(buffer)
 
             return None
 
         except Exception as e:
             print(f"Error reading tag: {e}")
             return None
+
+    def _parse_tag(self, data: str) -> dict[str, str]:
+        raw_rssi = int(data[10:12], 16)
+        rssi = -((-raw_rssi) & 0xFF)
+        pc = data[12:16]
+        epc = data[16:40]
+        crc = data[40:44]
+
+        return {"pc": pc, "epc": epc, "rssi": str(rssi), "crc": str(crc)}
 
     def inventory(self, timeout: float = 1.0) -> list[dict[str, str]]:
         """
@@ -233,7 +236,7 @@ class RFIDReader:
             raise ConnectionError("Reader is not connected")
 
         try:
-            tags = []
+            tags: dict[str, dict[str, str]] = {}
 
             # Send inventory command
             self.send_command(Command.GET_INVENTORY, b"\x22\x27\x10")
@@ -245,44 +248,33 @@ class RFIDReader:
             if buffer.startswith(Command.NOTIFICATION_POOLING.value.hex()):
                 print("Debug - Prefix matched successfully")
                 # Get number of tags from response
-                num_tags = int(buffer[8:10], 16)
-                print(f"Debug - Number of tags found: {num_tags}")
-
+                positions = [
+                    m.start()
+                    for m in re.finditer(
+                        re.escape(Command.NOTIFICATION_POOLING.value.hex()), buffer
+                    )
+                ]
+                boundaries = list(zip(positions, positions[1:] + [len(buffer)]))
                 # Parse each tag
-                pos = 10  # Start position after tag count
-                for i in range(num_tags):
-                    # Minimum length for one tag data is 34 bytes
-                    if len(buffer) < pos + 34:
+                for i in range(0, len(positions)):
+                    start, end = boundaries[i]
+                    # Minimum length for one tag data is 44 bytes
+                    if (end - start) < 44:
                         print(
-                            f"Debug - Buffer too short at tag {i}. Length: {len(buffer)}, Position: {pos}"  # noqa: E501
+                            f"Debug - Buffer too short at tag {i}. Length: {len(buffer)}, Position: {start}"  # noqa: E501
                         )
                         break
 
-                    rssi = int(buffer[pos : pos + 2], 16)
-                    rssi = -((-rssi) & 0xFF)
-                    pos += 2
+                    tag_data = self._parse_tag(buffer[start:end])
+                    epc = tag_data["epc"]
+                    if epc not in tags:
+                        tags[epc] = tag_data
+                        print(f"Debug - Tag {i} data: {tag_data}")
 
-                    pc = buffer[pos : pos + 4]
-                    pos += 4
-
-                    epc = buffer[pos : pos + 24]
-                    pos += 24
-
-                    crc = buffer[pos : pos + 4]
-                    pos += 4
-
-                    tag_data = {
-                        "pc": pc,
-                        "epc": epc,
-                        "rssi": str(rssi),
-                        "crc": str(crc),
-                    }
-                    print(f"Debug - Tag {i} data: {tag_data}")
-                    tags.append(tag_data)
+                print(f"Debug - Number of tags found: {len(tags)}")
             else:
                 print("Debug - Prefix match failed")
-
-            return tags
+            return list(tags.values())
 
         except Exception as e:
             print(f"Error during inventory: {e}")
