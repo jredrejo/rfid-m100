@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -8,6 +9,8 @@ import serial
 from .constants import Command
 from .constants import InfoVersion
 from .constants import PacketType
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -54,7 +57,7 @@ class RFIDReader:
             self.serial.flush()
             return True
         except serial.SerialException as e:
-            print(f"Error connecting to RFID reader: {e}")
+            logger.exception(f"Error connecting to RFID reader: {e}")
             return False
 
     def disconnect(self):
@@ -138,6 +141,7 @@ class RFIDReader:
         self, command: Command, payload: Optional[bytes] = None, time_wait: bool = True
     ) -> bool:
         if not self.serial or not self.serial.is_open:
+            logger.exception("Reader is not connected")
             raise ConnectionError("Reader is not connected")
 
         try:
@@ -163,7 +167,7 @@ class RFIDReader:
                 time.sleep(0.1)
             return True
         except Exception as e:
-            print(f"Error sending command: {e}")
+            logger.exception(f"Error sending command: {e}")
             return False
 
     def get_reader_info(self) -> Optional[dict[str, str]]:
@@ -188,7 +192,7 @@ class RFIDReader:
             }
 
         except Exception as e:
-            print(f"Error getting reader info: {e}")
+            logger.exception(f"Error getting reader info: {e}")
             return None
 
     def read_tag(self) -> Optional[dict[str, str]]:
@@ -212,7 +216,7 @@ class RFIDReader:
             return None
 
         except Exception as e:
-            print(f"Error reading tag: {e}")
+            logger.exception(f"Error reading tag: {e}")
             return None
 
     def _parse_tag(self, data: str) -> dict[str, str]:
@@ -239,14 +243,14 @@ class RFIDReader:
             tags: dict[str, dict[str, str]] = {}
 
             # Send inventory command
+            # 2710: up to 10000 tags
             self.send_command(Command.GET_INVENTORY, b"\x22\x27\x10")
 
             # Read response
             buffer = self._read_hex()
-
             # Parse multiple tag response
             if buffer.startswith(Command.NOTIFICATION_POOLING.value.hex()):
-                print("Debug - Prefix matched successfully")
+                logger.debug("Prefix matched successfully")
                 # Get number of tags from response
                 positions = [
                     m.start()
@@ -260,24 +264,24 @@ class RFIDReader:
                     start, end = boundaries[i]
                     # Minimum length for one tag data is 44 bytes
                     if (end - start) < 44:
-                        print(
-                            f"Debug - Buffer too short at tag {i}. Length: {len(buffer)}, Position: {start}"  # noqa: E501
-                        )
+                        logger.error(
+                            f"Buffer too short at tag {i}. Length: {len(buffer)}, Position: {start}"
+                        )  # noqa: E501
                         break
 
                     tag_data = self._parse_tag(buffer[start:end])
                     epc = tag_data["epc"]
                     if epc not in tags:
                         tags[epc] = tag_data
-                        print(f"Debug - Tag {i} data: {tag_data}")
+                        logger.info(f"Tag data: {tag_data}")
 
-                print(f"Debug - Number of tags found: {len(tags)}")
+                logger.info(f"Number of tags found: {len(tags)}")
             else:
-                print("Debug - Prefix match failed")
+                logger.debug("Prefix match failed")
             return list(tags.values())
 
         except Exception as e:
-            print(f"Error during inventory: {e}")
+            logger.exception(f"Error during inventory: {e}")
             return []
 
     def automatic_frequency_hopping_mode(self, mode: bool = True) -> bool:
@@ -296,5 +300,5 @@ class RFIDReader:
             time.sleep(0.1)
             return True
         except Exception as e:
-            print(f"Error setting automatic frequency hopping mode: {e}")
+            logger.exception(f"Error setting automatic frequency hopping mode: {e}")
             return False

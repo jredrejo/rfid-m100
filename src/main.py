@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
+import logging
 import sys
 import time
 
 from .rfid_reader import RFIDReader
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 
 def print_tag(tag: dict[str, str]):
