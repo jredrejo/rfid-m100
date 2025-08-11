@@ -70,9 +70,13 @@ class RFIDReader:
         if not hasattr(self, "serial"):
             raise ValueError("Serial port not initialized")
         buffer = []
-        while self.serial.in_waiting > 0:
-            read_byte = self.serial.read().hex()
-            buffer.append(read_byte)
+        to_read = int(getattr(self.serial, "in_waiting", 0) or 0)
+
+        for _ in range(to_read):
+            b = self.serial.read()
+            if not b:
+                break
+            buffer.append(b.hex())
 
         self.serial.flush()
         return "".join(buffer)
@@ -93,7 +97,7 @@ class RFIDReader:
     def _extract_text_from_hex(self, hex_string: str) -> str:
         """
         Extract ASCII text from a hex string,
-        starting after the first '00' byte
+        starting 2 bytes after the response head 'bb0103' byte
         and excluding the last two bytes.
 
         Args:
@@ -104,13 +108,12 @@ class RFIDReader:
             str: Decoded ASCII text
         """
         # Find the position of '00' in the hex string
-        zero_pos = hex_string.find("00")
+        zero_pos = hex_string.find("bb0103")
         if zero_pos == -1:
             return ""
 
         # Get the relevant portion (after '00', excluding last 2 bytes)
-        hex_text = hex_string[zero_pos + 2 : -4]
-
+        hex_text = hex_string[zero_pos + 12 : -4]
         # Convert hex string to bytes and then to ASCII
         try:
             bytes_data = bytes.fromhex(hex_text)
@@ -140,7 +143,7 @@ class RFIDReader:
     def send_command(
         self, command: Command, payload: Optional[bytes] = None, time_wait: bool = True
     ) -> bool:
-        if not self.serial or not self.serial.is_open:
+        if not hasattr(self, "serial") or not self.serial.is_open:
             logger.exception("Reader is not connected")
             raise ConnectionError("Reader is not connected")
 
@@ -200,7 +203,7 @@ class RFIDReader:
         Read a single RFID tag
         Returns a dictionary with tag data if successful, None otherwise
         """
-        if not self.serial or not self.serial.is_open:
+        if not hasattr(self, "serial") or not self.serial.is_open:
             raise ConnectionError("Reader is not connected")
 
         try:
@@ -236,7 +239,7 @@ class RFIDReader:
         Returns:
             List of dictionaries containing tag data
         """
-        if not self.serial or not self.serial.is_open:
+        if not hasattr(self, "serial") or not self.serial.is_open:
             raise ConnectionError("Reader is not connected")
 
         try:
@@ -285,7 +288,7 @@ class RFIDReader:
             return []
 
     def automatic_frequency_hopping_mode(self, mode: bool = True) -> bool:
-        if not self.serial or not self.serial.is_open:
+        if not hasattr(self, "serial") or not self.serial.is_open:
             raise ConnectionError("Reader is not connected")
 
         try:
