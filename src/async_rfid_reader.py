@@ -1,8 +1,13 @@
+import asyncio
+from asyncio.streams import StreamWriter
 import logging
 import re
-import time
-
+import serial
+import serial_asyncio
+from typing import cast
 from typing import Optional
+from .constants import Command, InfoVersion
+from .rfid_reader import RFIDReader
 from .utils import (
     create_packet,
     extract_text_from_hex,
@@ -10,97 +15,107 @@ from .utils import (
     verify_checksum,
 )
 
-import serial
-
-from .constants import Command
-from .constants import InfoVersion
 
 logger = logging.getLogger(__name__)
 
 
-class RFIDReader:
-    """
-    RFID Reader class for ISO18000-6C / EPC C1 GEN2 protocol
-    """
+class AsyncRFIDReader(RFIDReader):
+    """Async RFID Reader"""
 
-    def __init__(self, port: str = "/dev/ttyUSB0", baudrate: int = 115200):
-        self.port = port
-        self.baudrate = baudrate
-
-    def connect(self) -> bool:
+    async def async_connect(self) -> bool:
+        self.reader: asyncio.streams.StreamReader
+        self.writer: asyncio.streams.StreamWriter
         try:
-            self.serial = serial.Serial(
-                port=self.port,
+            self.reader, self.writer = await serial_asyncio.open_serial_connection(
+                url=self.port,
                 baudrate=self.baudrate,
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=None,
             )
-            self.serial.flush()
+
+            self.transport = cast(serial_asyncio.SerialTransport, self.writer.transport)
+            await self.clear_buffers()
+
             return True
         except serial.SerialException as e:
             logger.exception(f"Error connecting to RFID reader: {e}")
             return False
+        except Exception as e:
+            logger.exception(f"Unexpected error connecting to RFID reader: {e}")
+            return False
 
-    def disconnect(self):
-        if hasattr(self, "serial") and self.serial.is_open:
-            self.serial.flush()
-            self.serial.close()
+    async def clear_buffers(self):
+        if self.transport.serial:
+            if self.is_port_open():
+                await self.writer.drain()
+            self.transport.serial.reset_input_buffer()
+            self.transport.serial.reset_output_buffer()
 
-    def _read_hex(self) -> str:
-        """Read hex data from serial port"""
-        if not hasattr(self, "serial"):
-            raise ValueError("Serial port not initialized")
-        buffer = []
-        to_read = int(getattr(self.serial, "in_waiting", 0) or 0)
+    async def async_disconnect(self):
+        if self.is_port_open():
+            # ensure pending writes are flushed before closing
+            await self.clear_buffers()
+            self.writer.close()
+            await self.writer.wait_closed()
 
-        for _ in range(to_read):
-            b = self.serial.read()
-            if not b:
-                break
-            buffer.append(b.hex())
+    def is_port_open(self) -> bool:
+        if not hasattr(self, "writer"):
+            return False
+        ser = getattr(self.transport, "serial", None)
+        return bool(ser and ser.is_open)
 
-        self.serial.flush()
-        return "".join(buffer)
-
-    def send_command(
-        self,
-        command: Command,
-        payload: Optional[bytes] = None,
-        time_wait: Optional[float] = 0.1,
+    async def async_send_command(
+        self, command: Command, payload: Optional[bytes] = None, time_wait: float = 0.1
     ) -> bool:
-        if not hasattr(self, "serial") or not self.serial.is_open:
+        if not self.is_port_open():
             logger.exception("Reader is not connected")
             raise ConnectionError("Reader is not connected")
 
         try:
-            self.serial.flush()
-            self.serial.reset_input_buffer()
+            await self.clear_buffers()
             frame = create_packet(command, payload)
-            self.serial.write(frame)
-            self.serial.write(Command.TERMINATOR.value)
+
+            self.writer.write(frame)
+            self.writer.write(Command.TERMINATOR.value)
+            await self.writer.drain()  # <-- important: let the loop flush the buffer
+
             if time_wait is not None:
                 # Give time for the reader to collect data
-                time.sleep(time_wait)
+                await asyncio.sleep(time_wait)
             return True
         except Exception as e:
             logger.exception(f"Error sending command: {e}")
             return False
 
-    def get_reader_info(self) -> Optional[dict[str, str]]:
+    async def async_read_hex(self) -> str:
+        """Read hex data from serial port asynchronously"""
+        if not hasattr(self, "reader") or not hasattr(self, "writer"):
+            raise ValueError("Serial streams not initialized")
+
+        # using inWaiting with async does not have sense, we must read all data
+        # Considering this rfid device will never sent more than 64K of data
+        try:
+            buffer = await asyncio.wait_for(self.reader.read(65536), timeout=0.1)
+        except asyncio.TimeoutError:
+            buffer = b""
+
+        return buffer.hex()
+
+    async def async_get_reader_info(self) -> Optional[dict[str, str]]:
         """Get reader information"""
         try:
-            self.send_command(Command.GET_INFO, InfoVersion.HARDWARE.value)
-            hw_version = self._read_hex()
+            await self.async_send_command(Command.GET_INFO, InfoVersion.HARDWARE.value)
+            hw_version = await self.async_read_hex()
             hw_version_text = extract_text_from_hex(hw_version)
-
-            self.send_command(Command.GET_INFO, InfoVersion.SOFTWARE.value)
-            sw_version = self._read_hex()
+            await self.async_send_command(Command.GET_INFO, InfoVersion.SOFTWARE.value)
+            sw_version = await self.async_read_hex()
             sw_version_text = extract_text_from_hex(sw_version)
 
-            self.send_command(Command.GET_INFO, InfoVersion.MANUFACTURERS.value)
-            manufacturer = self._read_hex()
+            await self.async_send_command(
+                Command.GET_INFO, InfoVersion.MANUFACTURERS.value
+            )
+            manufacturer = await self.async_read_hex()
             manufacturer_text = extract_text_from_hex(manufacturer)
 
             return {
@@ -113,50 +128,30 @@ class RFIDReader:
             logger.exception(f"Error getting reader info: {e}")
             return None
 
-    def read_tag(self) -> Optional[dict[str, str]]:
-        """
-        Read a single RFID tag
-        Returns a dictionary with tag data if successful, None otherwise
-        """
-        if not hasattr(self, "serial") or not self.serial.is_open:
-            raise ConnectionError("Reader is not connected")
-
+    async def async_read_tag(self) -> Optional[dict[str, str]]:
+        """Read a tag asynchronously"""
         try:
-            self.send_command(Command.GET_SINGLE_POOLING, time_wait=0.4)
-            buffer = self._read_hex()
-
+            await self.async_send_command(Command.GET_SINGLE_POOLING, time_wait=0.4)
+            buffer = await self.async_read_hex()
             # verify output is valid - card found
             if buffer.startswith(
                 Command.NOTIFICATION_POOLING.value.hex()
             ) and verify_checksum(buffer):
                 return parse_tag(buffer)
-
-            return None
-
+            else:
+                return None
         except Exception as e:
             logger.exception(f"Error reading tag: {e}")
             return None
 
-    def inventory(self, timeout: float = 1.0) -> list[dict[str, str]]:
-        """
-        Perform an ISO18000-6C inventory command to read multiple tags at once
-        Args:
-            timeout: How long to wait for response in seconds
-        Returns:
-            List of dictionaries containing tag data
-        """
-        if not hasattr(self, "serial") or not self.serial.is_open:
-            raise ConnectionError("Reader is not connected")
-
+    async def async_inventory(self) -> list[dict[str, str]]:
+        """Perform an ISO18000-6C inventory command to read multiple tags at once"""
         try:
             tags: dict[str, dict[str, str]] = {}
-
             # Send inventory command
             # 2710: up to 10000 tags
-            self.send_command(Command.GET_INVENTORY, b"\x22\x27\x10")
-
-            # Read response
-            buffer = self._read_hex()
+            await self.async_send_command(Command.GET_INVENTORY, b"\x22\x27\x10")
+            buffer = await self.async_read_hex()
             # Parse multiple tag response
             if buffer.startswith(Command.NOTIFICATION_POOLING.value.hex()):
                 logger.debug("Prefix matched successfully")
@@ -195,32 +190,13 @@ class RFIDReader:
             logger.exception(f"Error during inventory: {e}")
             return []
 
-    def automatic_frequency_hopping_mode(self, mode: bool = True) -> bool:
-        if not hasattr(self, "serial") or not self.serial.is_open:
-            raise ConnectionError("Reader is not connected")
-
-        try:
-            self.serial.write(Command.AFHM.value)
-            # xFF\xAD\x7E
-            if mode:
-                self.serial.write(b"\xFF")
-            else:
-                self.serial.write(b"\x00")
-
-            self.serial.write(Command.TERMINATOR.value)
-            time.sleep(0.1)
-            return True
-        except Exception as e:
-            logger.exception(f"Error setting automatic frequency hopping mode: {e}")
-            return False
-
-    def get_power(self) -> Optional[float]:
+    async def async_get_power(self) -> Optional[float]:
         """Get reader power"""
         """ Returns a float with the dBm value """
 
         try:
-            self.send_command(Command.GET_POWER)
-            buffer = self._read_hex()
+            await self.async_send_command(Command.GET_POWER)
+            buffer = await self.async_read_hex()
             if buffer.startswith(
                 Command.GENERAL_NOTIFICATION_HEADER.value.hex()
             ) and verify_checksum(buffer):

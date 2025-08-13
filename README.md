@@ -12,3 +12,6 @@ pre-commit install
 
 To execute in a shell:
 python -m src.main
+
+or to execute the async version:
+python -m src.main_async

@@ -1,14 +1,52 @@
 #!/usr/bin/env python3
+import asyncio
 import logging
 import sys
-import time
 
-from .rfid_reader import RFIDReader
+
+from .async_rfid_reader import AsyncRFIDReader
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+
+async def single_tag_mode(reader: AsyncRFIDReader):
+    """Run single tag reading mode"""
+    print("\nSingle Tag Reading Mode")
+    print("Press Ctrl+C to return to menu")
+    try:
+        while True:
+            tag = await reader.async_read_tag()
+            if tag:
+                print("\nTag detected!")
+                print_tag(tag)
+            await asyncio.sleep(0.1)
+    except KeyboardInterrupt:
+        print("\nReturning to menu...")
+
+
+async def inventory_mode(reader: AsyncRFIDReader):
+    """Run inventory mode"""
+    print("\nInventory Mode (Multiple Tags)")
+    print("Press Ctrl+C to return to menu")
+    try:
+        while True:
+            print("\nPerforming ISO18000-6C inventory...")
+            tags = await reader.async_inventory()
+
+            if tags:
+                print(f"\nFound {len(tags)} tags in this inventory round:")
+                for i, tag in enumerate(tags, 1):
+                    print(f"\nTag {i}:")
+                    print_tag(tag)
+            else:
+                print("No tags found")
+
+            await asyncio.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nReturning to menu...")
 
 
 def print_tag(tag: dict[str, str]):
@@ -29,56 +67,19 @@ def print_menu():
     return input("Select mode (1, 2, 3, or q): ")
 
 
-def single_tag_mode(reader: RFIDReader):
-    """Run single tag reading mode"""
-    print("\nSingle Tag Reading Mode")
-    print("Press Ctrl+C to return to menu")
-    try:
-        while True:
-            tag = reader.read_tag()
-            if tag:
-                print("\nTag detected!")
-                print_tag(tag)
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        print("\nReturning to menu...")
-
-
-def inventory_mode(reader: RFIDReader):
-    """Run inventory mode"""
-    print("\nInventory Mode (Multiple Tags)")
-    print("Press Ctrl+C to return to menu")
-    try:
-        while True:
-            print("\nPerforming ISO18000-6C inventory...")
-            tags = reader.inventory()
-
-            if tags:
-                print(f"\nFound {len(tags)} tags in this inventory round:")
-                for i, tag in enumerate(tags, 1):
-                    print(f"\nTag {i}:")
-                    print_tag(tag)
-            else:
-                print("No tags found")
-
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        print("\nReturning to menu...")
-
-
-def main():
+async def main():
     # Initialize the RFID reader
-    reader = RFIDReader(port="/dev/ttyUSB0")
+    reader = AsyncRFIDReader(port="/dev/ttyUSB0")
 
     try:
         # Connect to the reader
-        if not reader.connect():
+        if not await reader.async_connect():
             print("Failed to connect to RFID reader")
             sys.exit(1)
 
         print("Successfully connected to RFID reader")
         print("\nReader Information:")
-        reader_info = reader.get_reader_info()
+        reader_info = await reader.async_get_reader_info()
         if reader_info:
             print(f"Hardware Version: {reader_info['hardware_version']}")
             print(f"Software Version: {reader_info['software_version']}")
@@ -89,13 +90,15 @@ def main():
             choice = print_menu()
 
             if choice == "1":
-                single_tag_mode(reader)
+                await single_tag_mode(reader)
             elif choice == "2":
-                inventory_mode(reader)
+                await inventory_mode(reader)
             elif choice == "3":
-                power = reader.get_power()
+                power = await reader.async_get_power()
                 if power:
-                    print(f"\nPower: {power} dBm")
+                    print(f"Transmit Power: {power} dBm")
+                else:
+                    print("Failed to get power")
             elif choice.lower() == "q":
                 break
             else:
@@ -109,4 +112,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

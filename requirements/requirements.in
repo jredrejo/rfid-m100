@@ -1,1 +1,5 @@
+# in case you use sync version
 pyserial>=3.5
+
+# in case you want  async version:
+pyserial-asyncio

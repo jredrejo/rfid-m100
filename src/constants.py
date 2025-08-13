@@ -6,9 +6,11 @@ class Command(Enum):
     FRAME_TAIL = b"\x7E"
     TERMINATOR = b"\x0A\x0D"
     NOTIFICATION_POOLING = b"\xBB\x02\x22\x00\x11"
+    GENERAL_NOTIFICATION_HEADER = b"\xBB"
     GET_INVENTORY = b"\x27"
     GET_SINGLE_POOLING = b"\x22"
     GET_INFO = b"\x03"
+    GET_POWER = b"\xB7"
     AFHM = b"\xAD"
 
 
@@ -69,3 +71,6 @@ class Region(Enum):
         b"\x06"  # freq = 917.100 ~ 923.300MHz (Korea)         Step:0.2MHz  # noqa: E501
     )
     MAX = b"\x07"
+
+
+MIN_RSSI = -60

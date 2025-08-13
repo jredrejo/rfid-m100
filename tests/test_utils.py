@@ -160,15 +160,15 @@ def test_pack_frame_no_checksum():
 
 
 def test_parse_tag():
-    data = "bb000c00ff3000123456789ABCDEF0123456781234"
+    data = "bb02220011e13000e2801191a5020000001531994503187e"
     result = parse_tag(data)
-    assert result["pc"] == "0012"
-    assert result["epc"] == "3456789ABCDEF01234567812"
-    assert result["crc"] == "34"
-    assert result["rssi"] == "-208"
+    assert result["pc"] == "3000"
+    assert result["epc"] == "e2801191a502000000153199"
+    assert result["crc"] == "4503"
+    assert result["rssi"] == "-31"
 
 
-def test_parse_tag_negative_rssi():
+def test_parse_tag_insufficient_rssi():
     data = "bb000c0080300012345678"
     result = parse_tag(data)
-    assert result["rssi"] == "-208"
+    assert result is None

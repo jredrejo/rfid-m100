@@ -7,7 +7,8 @@ from unittest.mock import Mock, patch
 import serial
 
 # Import the module under test
-from src.rfid_reader import RFIDReader, RequestPacket
+from src.rfid_reader import RFIDReader
+from src.utils import RequestPacket
 from src.constants import Command
 
 
@@ -137,8 +138,8 @@ class TestRFIDReaderCommands:
         reader = RFIDReader()
         reader.serial = mock_serial_device
         mock_serial_device.is_open = True
-        with patch("src.rfid_reader.calculate_crc", return_value=b"\x04"), patch(
-            "src.rfid_reader.pack_frame", return_value=b"\xbb\x01\x03\x00\x00\x04\x7e"
+        with patch("src.utils.calculate_crc", return_value=b"\x04"), patch(
+            "src.utils.pack_frame", return_value=b"\xbb\x01\x03\x00\x00\x04\x7e"
         ), patch("time.sleep"):
             result = reader.send_command(Command.GET_INFO)
             assert result is True
@@ -157,8 +158,8 @@ class TestRFIDReaderCommands:
 
         payload = b"\x01\x02"
 
-        with patch("src.rfid_reader.calculate_crc", return_value=b"\x07"), patch(
-            "src.rfid_reader.pack_frame",
+        with patch("src.utils.calculate_crc", return_value=b"\x07"), patch(
+            "src.utils.pack_frame",
             return_value=b"\xbb\x01\x03\x00\x02\x01\x02\x07\x7e",
         ), patch("time.sleep"):
 
@@ -172,11 +173,11 @@ class TestRFIDReaderCommands:
         reader.serial = mock_serial_device
         mock_serial_device.is_open = True
 
-        with patch("src.rfid_reader.calculate_crc", return_value=b"\x04"), patch(
-            "src.rfid_reader.pack_frame", return_value=b"\xbb\x01\x03\x00\x00\x04\x7e"
+        with patch("src.utils.calculate_crc", return_value=b"\x04"), patch(
+            "src.utils.pack_frame", return_value=b"\xbb\x01\x03\x00\x00\x04\x7e"
         ), patch("time.sleep") as mock_sleep:
 
-            result = reader.send_command(Command.GET_INFO, time_wait=False)
+            result = reader.send_command(Command.GET_INFO, time_wait=None)
 
             assert result is True
             mock_sleep.assert_not_called()
@@ -204,8 +205,8 @@ class TestRFIDReaderCommands:
         mock_serial_device.is_open = True
         mock_serial_device.write.side_effect = Exception("Write error")
 
-        with patch("src.rfid_reader.calculate_crc", return_value=b"\x04"), patch(
-            "src.rfid_reader.pack_frame", return_value=b"\xbb\x01\x03\x00\x00\x04\x7e"
+        with patch("src.utils.calculate_crc", return_value=b"\x04"), patch(
+            "src.utils.pack_frame", return_value=b"\xbb\x01\x03\x00\x00\x04\x7e"
         ):
 
             result = reader.send_command(Command.GET_INFO)
@@ -463,6 +464,61 @@ class TestRFIDReaderFrequencyHopping:
         result = reader.automatic_frequency_hopping_mode()
 
         assert result is False
+
+
+class TestRFIDReaderPower:
+    """Test power related methods"""
+
+    def test_get_power_success(self):
+        """Test successful power level retrieval"""
+        reader = RFIDReader()
+        reader.serial = Mock()
+        reader.serial.is_open = True
+
+        # Mock the response from _read_hex
+        mock_response = "bb010e000407ff197e"  # 0x07FF = 2047
+
+        with patch.object(
+            reader, "send_command", return_value=True
+        ) as mock_send, patch.object(reader, "_read_hex", return_value=mock_response):
+
+            power = reader.get_power()
+
+            assert power == 20.47  # 2047 / 100 = 20.47
+            mock_send.assert_called_once_with(Command.GET_POWER)
+
+    def test_get_power_not_connected(self):
+        """Test getting power when not connected"""
+        reader = RFIDReader()
+        assert reader.get_power() is None
+
+    def test_get_power_invalid_response(self):
+        """Test getting power with invalid response"""
+        reader = RFIDReader()
+        reader.serial = Mock()
+        reader.serial.is_open = True
+
+        # Mock an invalid response (wrong header)
+        mock_response = "ffffffff0000000000000000000000000000"
+
+        with patch.object(reader, "send_command", return_value=True), patch.object(
+            reader, "_read_hex", return_value=mock_response
+        ):
+
+            power = reader.get_power()
+            assert power is None
+
+    def test_get_power_exception(self):
+        """Test getting power when an exception occurs"""
+        reader = RFIDReader()
+        reader.serial = Mock()
+        reader.serial.is_open = True
+
+        with patch.object(
+            reader, "send_command", side_effect=Exception("Command error")
+        ):
+            power = reader.get_power()
+            assert power is None
 
 
 class TestRFIDReaderIntegration:
