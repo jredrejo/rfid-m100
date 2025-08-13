@@ -5,4 +5,8 @@
 #    pip-compile requirements/requirements.in
 #
 pyserial==3.5
+    # via
+    #   -r requirements/requirements.in
+    #   pyserial-asyncio
+pyserial-asyncio==0.6
     # via -r requirements/requirements.in
