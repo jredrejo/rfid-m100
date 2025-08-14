@@ -49,7 +49,6 @@ async def main():
             sys.exit(1)
 
         print("Successfully connected to RFID reader")
-        breakpoint()
         print("\nReader Information:")
         reader_info = await reader.async_get_reader_info()
         if reader_info:

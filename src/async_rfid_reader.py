@@ -40,7 +40,6 @@ class AsyncRFIDReader(RFIDReader):
             logger.exception(f"Unexpected error connecting to RFID reader: {e}")
             return False
 
-
     async def async_disconnect(self):
         if self.is_port_open():
             # ensure pending writes are flushed before closing
@@ -81,7 +80,7 @@ class AsyncRFIDReader(RFIDReader):
 
             self.writer.write(frame)
             self.writer.write(Command.TERMINATOR.value)
-            await self.writer.drain()          # <-- important: let the loop flush the buffer
+            await self.writer.drain()  # <-- important: let the loop flush the buffer
 
             if time_wait:
                 # Give time for the reader to collect data
@@ -93,29 +92,17 @@ class AsyncRFIDReader(RFIDReader):
 
     async def async_read_hex(self) -> str:
         """Read hex data from serial port asynchronously"""
-        if not self.is_port_open():
-            raise ValueError("Serial port not initialized")
+        if not hasattr(self, "reader") or not hasattr(self, "writer"):
+            raise ValueError("Serial streams not initialized")
 
-        buffer = []
-        transport = cast(serial_asyncio.SerialTransport, self.writer.transport)
+        # using inWaiting with async does not have sense, we must read all data
+        # Considering this rfid device will never sent more than 64K of data
+        try:
+            buffer = await asyncio.wait_for(self.reader.read(65536), timeout=0.1)
+        except asyncio.TimeoutError:
+            buffer = b""
 
-        # Get the number of bytes available to read
-        if transport.serial:
-            to_read = transport.serial.in_waiting
-
-            for _ in range(to_read):
-                try:
-                    # Read exactly 1 byte with timeout
-                    data = await asyncio.wait_for(self.reader.read(1), timeout=0.1)
-                    if not data:
-                        break
-                    buffer.append(data.hex())
-                except asyncio.TimeoutError:
-                    break
-
-            transport.serial.flush()
-
-        return "".join(buffer)
+        return buffer.hex()
 
     async def async_get_reader_info(self) -> Optional[dict[str, str]]:
         """Get reader information"""
@@ -123,12 +110,13 @@ class AsyncRFIDReader(RFIDReader):
             await self.async_send_command(Command.GET_INFO, InfoVersion.HARDWARE.value)
             hw_version = await self.async_read_hex()
             hw_version_text = self._extract_text_from_hex(hw_version)
-
             await self.async_send_command(Command.GET_INFO, InfoVersion.SOFTWARE.value)
             sw_version = await self.async_read_hex()
             sw_version_text = self._extract_text_from_hex(sw_version)
 
-            await self.async_send_command(Command.GET_INFO, InfoVersion.MANUFACTURERS.value)
+            await self.async_send_command(
+                Command.GET_INFO, InfoVersion.MANUFACTURERS.value
+            )
             manufacturer = await self.async_read_hex()
             manufacturer_text = self._extract_text_from_hex(manufacturer)
 
