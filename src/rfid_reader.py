@@ -1,8 +1,15 @@
 import logging
 import re
 import time
-from dataclasses import dataclass
+
 from typing import Optional
+from .utils import (
+    calculate_crc,
+    extract_text_from_hex,
+    pack_frame,
+    parse_tag,
+    RequestPacket,
+)
 
 import serial
 
@@ -11,28 +18,6 @@ from .constants import InfoVersion
 from .constants import PacketType
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class RequestPacket:
-    """
-    A packet object with attributes:
-        head: Single byte header
-        type: Single byte type
-        command: Single byte command
-        length: 16-bit unsigned int length
-        payload: Bytes/bytearray of data
-        checksum: Single byte checksum
-        tail: Single byte trailer
-    """
-
-    head: bytes
-    type: bytes
-    command: bytes
-    length: bytes
-    payload: Optional[bytes]
-    checksum: Optional[bytes]
-    tail: bytes
 
 
 class RFIDReader:
@@ -81,65 +66,6 @@ class RFIDReader:
         self.serial.flush()
         return "".join(buffer)
 
-    def calculate_crc(self, packet: RequestPacket) -> bytes:
-        """Calculate CRC for YRM100 protocol.
-        Returns a single byte."""
-        data = packet.type
-        data += packet.command
-        data += packet.length
-        if packet.payload is not None:
-            data += packet.payload
-        crc = 0
-        for byte in data:
-            crc += byte
-        return bytes([crc & 0xFF])
-
-    def _extract_text_from_hex(self, hex_string: str) -> str:
-        """
-        Extract ASCII text from a hex string,
-        starting 2 bytes after the response head 'bb0103' byte
-        and excluding the last two bytes.
-
-        Args:
-            hex_string (str):
-            like 'bb01030010004d31303020323664426d2056312e30927e'
-
-        Returns:
-            str: Decoded ASCII text
-        """
-        # Find the position of '00' in the hex string
-        zero_pos = hex_string.find("bb0103")
-        if zero_pos == -1:
-            return ""
-
-        # Get the relevant portion (after '00', excluding last 2 bytes)
-        hex_text = hex_string[zero_pos + 12 : -4]
-        # Convert hex string to bytes and then to ASCII
-        try:
-            bytes_data = bytes.fromhex(hex_text)
-            return bytes_data.decode("ascii")
-        except (ValueError, UnicodeDecodeError):
-            return ""
-
-    def pack_frame(self, packet: RequestPacket) -> bytes:
-        """
-        Pack a packet structure into a bytes buffer.
-        Args:
-            packet: A RequestPacket
-        Returns:
-            bytes: The packed frame
-        """
-        pbuf = packet.head
-        pbuf += packet.type
-        pbuf += packet.command
-        pbuf += packet.length
-        if packet.payload is not None:
-            pbuf += packet.payload
-        pbuf += packet.checksum if packet.checksum is not None else b"\x00"
-        pbuf += packet.tail
-
-        return pbuf
-
     def send_command(
         self, command: Command, payload: Optional[bytes] = None, time_wait: bool = True
     ) -> bool:
@@ -161,8 +87,8 @@ class RFIDReader:
                 checksum=None,
                 tail=Command.FRAME_TAIL.value,
             )
-            packet.checksum = self.calculate_crc(packet)
-            frame = self.pack_frame(packet)
+            packet.checksum = calculate_crc(packet)
+            frame = pack_frame(packet)
             self.serial.write(frame)
             self.serial.write(Command.TERMINATOR.value)
             if time_wait:
@@ -178,15 +104,15 @@ class RFIDReader:
         try:
             self.send_command(Command.GET_INFO, InfoVersion.HARDWARE.value)
             hw_version = self._read_hex()
-            hw_version_text = self._extract_text_from_hex(hw_version)
+            hw_version_text = extract_text_from_hex(hw_version)
 
             self.send_command(Command.GET_INFO, InfoVersion.SOFTWARE.value)
             sw_version = self._read_hex()
-            sw_version_text = self._extract_text_from_hex(sw_version)
+            sw_version_text = extract_text_from_hex(sw_version)
 
             self.send_command(Command.GET_INFO, InfoVersion.MANUFACTURERS.value)
             manufacturer = self._read_hex()
-            manufacturer_text = self._extract_text_from_hex(manufacturer)
+            manufacturer_text = extract_text_from_hex(manufacturer)
 
             return {
                 "hardware_version": hw_version_text,
@@ -214,22 +140,13 @@ class RFIDReader:
 
             # verify output is valid - card found
             if buffer.startswith(Command.NOTIFICATION_POOLING.value.hex()):
-                return self._parse_tag(buffer)
+                return parse_tag(buffer)
 
             return None
 
         except Exception as e:
             logger.exception(f"Error reading tag: {e}")
             return None
-
-    def _parse_tag(self, data: str) -> dict[str, str]:
-        raw_rssi = int(data[10:12], 16)
-        rssi = -((-raw_rssi) & 0xFF)
-        pc = data[12:16]
-        epc = data[16:40]
-        crc = data[40:44]
-
-        return {"pc": pc, "epc": epc, "rssi": str(rssi), "crc": str(crc)}
 
     def inventory(self, timeout: float = 1.0) -> list[dict[str, str]]:
         """
@@ -272,7 +189,7 @@ class RFIDReader:
                         )  # noqa: E501
                         break
 
-                    tag_data = self._parse_tag(buffer[start:end])
+                    tag_data = parse_tag(buffer[start:end])
                     epc = tag_data["epc"]
                     if epc not in tags:
                         tags[epc] = tag_data
